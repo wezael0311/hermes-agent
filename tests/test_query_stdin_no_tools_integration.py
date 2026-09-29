@@ -65,6 +65,8 @@ def _run(tmp_path, monkeypatch, capsys, raw, extra, *, injection=None):
         def __init__(self, **kwargs):
             observed["shell_kwargs"] = kwargs
             self.agent = FakeAgent()
+            self.agent.audited_query_transport = kwargs.get("audited_query_transport", False)
+            self.agent._audited_query = kwargs.get("audited_query_text")
             self.session_id = "test-session"
             self.conversation_history = []
             self._active_agent_route_signature = None
@@ -184,6 +186,20 @@ def test_sha_option_requires_query_stdin():
     with pytest.raises(SystemExit) as exc:
         cmd_chat(_parse(["--expected-query-sha256", "0" * 64, "-Q"]))
     assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("extra", [
+    ["--resume", "old-session"], ["--continue"], ["-s", "some-skill"],
+])
+def test_audited_query_rejects_history_and_preloaded_skills(
+    tmp_path, monkeypatch, capsys, extra
+):
+    raw = b"hello"
+    sha = hashlib.sha256(raw).hexdigest()
+    code, seen, output = _run(tmp_path, monkeypatch, capsys, raw, _command(sha, *extra))
+    assert code == 2
+    assert "audited_query_requires_fresh_unskilled_session" in output.err
+    assert seen["provider_calls"] == 0
 
 
 def test_normal_toolset_parser_regression():

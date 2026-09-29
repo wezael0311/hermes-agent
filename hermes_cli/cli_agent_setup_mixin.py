@@ -353,19 +353,20 @@ class CLIAgentSetupMixin:
         # self.system_prompt below. No-op when nothing was requested.
         self.finalize_preloaded_skills()
 
-        _prepare_deferred_agent_startup()
+        _prepare_deferred_agent_startup(tool_policy=getattr(self, "tool_policy", "auto"))
         self._install_tool_callbacks()
         self._ensure_tirith_security()
 
         if not self._ensure_runtime_credentials():
             return False
 
-        from hermes_cli.mcp_startup import ensure_mcp_discovery_before_agent_build
+        if getattr(self, "tool_policy", None) != "no_tools":
+            from hermes_cli.mcp_startup import ensure_mcp_discovery_before_agent_build
 
-        ensure_mcp_discovery_before_agent_build(
-            logger=logger,
-            single_query=getattr(self, "_single_query_mode", False),
-        )
+            ensure_mcp_discovery_before_agent_build(
+                logger=logger,
+                single_query=getattr(self, "_single_query_mode", False),
+            )
 
         # Initialize SQLite session store for CLI sessions (if not already done in __init__)
         if self._session_db is None:
@@ -503,13 +504,21 @@ class CLIAgentSetupMixin:
                 run_budget_seconds=getattr(self, "run_budget_seconds", None),
                 enabled_toolsets=self.enabled_toolsets,
                 no_tools=getattr(self, "tool_policy", None) == "no_tools",
+                audited_query_transport=getattr(self, "audited_query_transport", False),
+                audited_query_text=getattr(self, "audited_query_text", None),
                 tool_policy=getattr(self, "tool_policy", None),
                 disabled_toolsets=self.disabled_toolsets,
                 verbose_logging=self.verbose,
                 quiet_mode=not self.verbose,
                 tool_progress_mode=getattr(self, "tool_progress_mode", "all"),
-                ephemeral_system_prompt=self.system_prompt if self.system_prompt else None,
-                prefill_messages=self.prefill_messages or None,
+                ephemeral_system_prompt=(
+                    None if getattr(self, "audited_query_transport", False)
+                    else self.system_prompt if self.system_prompt else None
+                ),
+                prefill_messages=(
+                    None if getattr(self, "audited_query_transport", False)
+                    else self.prefill_messages or None
+                ),
                 reasoning_config=self.reasoning_config,
                 service_tier=self.service_tier,
                 request_overrides=request_overrides,
@@ -533,8 +542,9 @@ class CLIAgentSetupMixin:
                 checkpoint_max_total_size_mb=self.checkpoint_max_total_size_mb,
                 checkpoint_max_file_size_mb=self.checkpoint_max_file_size_mb,
                 pass_session_id=self.pass_session_id,
-                skip_context_files=self.ignore_rules,
-                skip_memory=self.ignore_rules,
+                skip_context_files=self.ignore_rules or getattr(self, "audited_query_transport", False),
+                skip_memory=self.ignore_rules or getattr(self, "audited_query_transport", False),
+                skip_background_review=getattr(self, "audited_query_transport", False),
                 tool_progress_callback=self._on_tool_progress,
                 tool_start_callback=self._on_tool_start if self._inline_diffs_enabled else None,
                 tool_complete_callback=self._on_tool_complete if self._inline_diffs_enabled else None,

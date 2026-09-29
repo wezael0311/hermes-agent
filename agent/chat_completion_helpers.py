@@ -939,8 +939,9 @@ def _dispatch_nonstreaming_api_request(agent, api_kwargs: dict, *, make_client):
     interrupt, abort, cancellation, and close semantics stay in the callers —
     this helper only issues the request.
     """
-    from agent.no_tools_boundary import assert_no_tools_boundary
+    from agent.no_tools_boundary import assert_audited_query_content, assert_no_tools_boundary
     assert_no_tools_boundary(agent, api_kwargs)
+    assert_audited_query_content(agent, api_kwargs)
     from agent.no_tools_receipt import mark_no_tools_dispatch
     mark_no_tools_dispatch(agent, api_kwargs)
     if agent.api_mode == "codex_responses":
@@ -3307,8 +3308,9 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
     Falls back to _interruptible_api_call on provider errors indicating
     streaming is not supported.
     """
-    from agent.no_tools_boundary import assert_no_tools_boundary
+    from agent.no_tools_boundary import assert_audited_query_content, assert_no_tools_boundary
     assert_no_tools_boundary(agent, api_kwargs)
+    assert_audited_query_content(agent, api_kwargs)
     from agent.no_tools_receipt import mark_no_tools_dispatch
     mark_no_tools_dispatch(agent, api_kwargs)
     if agent._interrupt_requested:

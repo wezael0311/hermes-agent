@@ -2956,6 +2956,8 @@ def cmd_chat(args):
     # Validate the audited stdin transport before importing cli or creating an
     # agent. The receipt describes input integrity at this pre-send point only.
     query_stdin = bool(getattr(args, "query_stdin", False))
+    audited_query_transport = query_stdin and bool(getattr(args, "no_tools", False))
+    audited_query_text = None
     expected_sha = getattr(args, "expected_query_sha256", None)
     if query_stdin:
         import hashlib
@@ -2967,6 +2969,14 @@ def cmd_chat(args):
             sys.exit(2)
         if use_tui or getattr(args, "image", None):
             print("query_stdin_requires_cli_text", file=sys.stderr)
+            sys.exit(2)
+        if audited_query_transport and any((
+            getattr(args, "resume", None),
+            getattr(args, "continue_last", None),
+            getattr(args, "create_if_missing", False),
+            getattr(args, "skills", None),
+        )):
+            print("audited_query_requires_fresh_unskilled_session", file=sys.stderr)
             sys.exit(2)
         if not isinstance(expected_sha, str) or re.fullmatch(
             r"[0-9a-f]{64}", expected_sha
@@ -2990,6 +3000,8 @@ def cmd_chat(args):
         if not args.query:
             print("query_stdin_empty", file=sys.stderr)
             sys.exit(2)
+        if audited_query_transport:
+            audited_query_text = args.query
         receipt = {
             "transport_version": "hermes-chat-query-stdin-v1",
             "query_byte_count": len(query_bytes),
@@ -3286,8 +3298,14 @@ def cmd_chat(args):
             accept_hooks=getattr(args, "accept_hooks", False),
         )
 
-    # Import and run the CLI
-    from cli import main as cli_main
+    # model_tools historically discovers plugins at import time. Scope that
+    # legacy side effect out of this explicit no-tools CLI import only.
+    if getattr(args, "no_tools", False):
+        from hermes_cli.plugins import suppress_plugin_discovery_for_no_tools_import
+        with suppress_plugin_discovery_for_no_tools_import():
+            from cli import main as cli_main
+    else:
+        from cli import main as cli_main
 
     # --query-file: read the single query from a file (or stdin via '-') so
     # callers never have to shell-quote message bodies. This is the transport
@@ -3326,6 +3344,8 @@ def cmd_chat(args):
         "quiet": getattr(args, "quiet", False),
         "query": args.query,
         "query_stdin": query_stdin,
+        "audited_query_transport": audited_query_transport,
+        "audited_query_text": audited_query_text,
         "image": getattr(args, "image", None),
         "resume": getattr(args, "resume", None),
         "worktree": getattr(args, "worktree", False),

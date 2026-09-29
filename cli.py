@@ -1013,12 +1013,15 @@ def _mark_tui_input_modes_active() -> None:
     _tui_input_modes_active = True
 
 
-def _prepare_deferred_agent_startup() -> None:
+def _prepare_deferred_agent_startup(*, tool_policy: str = "auto") -> None:
     """Run Termux-deferred agent discovery before the first real agent turn."""
     global _deferred_agent_startup_done
     if _deferred_agent_startup_done:
         return
     if os.environ.get("HERMES_DEFER_AGENT_STARTUP") != "1":
+        return
+    if tool_policy == "no_tools":
+        # A later normal CLI turn must still be able to run discovery.
         return
     _deferred_agent_startup_done = True
     _accept_hooks = os.environ.get("HERMES_ACCEPT_HOOKS", "").lower() in {
@@ -5014,6 +5017,11 @@ def _run_cli_agent_turn(agent, *, user_message, **kwargs):
         if not isinstance(user_message, str):
             raise ValueError("no_tools_requires_text_query")
         from agent.no_tools_receipt import start_no_tools_receipt
+        if getattr(agent, "audited_query_transport", False):
+            if kwargs.get("conversation_history") or getattr(agent, "prefill_messages", None):
+                raise RuntimeError("audited_query_requires_fresh_session")
+            if user_message != getattr(agent, "_audited_query", None):
+                raise RuntimeError("audited_query_content_mismatch")
         start_no_tools_receipt(agent, user_message)
     return agent.run_conversation(user_message=user_message, **kwargs)
 
@@ -5032,6 +5040,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         toolsets: List[str] = None,
         no_tools: bool = False,
         tool_policy: str | None = None,
+        audited_query_transport: bool = False,
+        audited_query_text: str | None = None,
         provider: str = None,
         reasoning: str = None,
         api_key: str = None,
@@ -5317,7 +5327,13 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # Parse and validate toolsets
         if no_tools and toolsets not in (None, []):
             raise ValueError("no_tools_conflicts_with_toolsets")
+        if audited_query_transport and not no_tools:
+            raise ValueError("audited_query_requires_no_tools")
+        if audited_query_transport and (not isinstance(audited_query_text, str) or not audited_query_text):
+            raise ValueError("audited_query_text_required")
         self.tool_policy = tool_policy or ("no_tools" if no_tools else ("explicit_toolsets" if toolsets is not None else "auto"))
+        self.audited_query_transport = audited_query_transport
+        self.audited_query_text = audited_query_text
         self.enabled_toolsets = [] if no_tools else toolsets
         from agent.skill_utils import parse_config_string_list
 
@@ -21079,6 +21095,8 @@ def main(
     query: str = None,
     q: str = None,
     query_stdin: bool = False,
+    audited_query_transport: bool = False,
+    audited_query_text: str | None = None,
     image: str = None,
     toolsets: str = None,
     no_tools: bool = False,
@@ -21251,6 +21269,10 @@ def main(
         raise ValueError("no_tools_conflicts_with_toolsets")
     if no_tools and image:
         raise ValueError("no_tools_requires_text_query")
+    if audited_query_transport and (not no_tools or not query_stdin or resume or skills):
+        raise ValueError("audited_query_requires_fresh_unskilled_session")
+    if audited_query_transport and query != audited_query_text:
+        raise RuntimeError("audited_query_content_mismatch")
     if no_tools:
         toolsets_list = []
     elif toolsets:
@@ -21288,6 +21310,8 @@ def main(
         model=model,
         toolsets=toolsets_list,
         no_tools=no_tools,
+        audited_query_transport=audited_query_transport,
+        audited_query_text=audited_query_text,
         tool_policy="no_tools" if no_tools else ("explicit_toolsets" if toolsets is not None else "auto"),
         provider=provider,
         reasoning=reasoning,

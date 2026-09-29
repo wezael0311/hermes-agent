@@ -1615,6 +1615,9 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
                 agent,
                 next_api_kwargs,
             )
+            from agent.no_tools_boundary import assert_audited_query_content, assert_no_tools_boundary
+            assert_no_tools_boundary(agent, stream_kwargs)
+            assert_audited_query_content(agent, stream_kwargs)
             stream_kwargs["stream"] = True
             stream_kwargs = _bypass_sdk_request_transform(stream_kwargs)
             return active_client.responses.create(**stream_kwargs)

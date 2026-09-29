@@ -524,6 +524,8 @@ def init_agent(
     enabled_toolsets: List[str] = None,
     no_tools: bool = False,
     tool_policy: str | None = None,
+    audited_query_transport: bool = False,
+    audited_query_text: str | None = None,
     disabled_toolsets: List[str] = None,
     save_trajectories: bool = False,
     verbose_logging: bool = False,
@@ -669,7 +671,14 @@ def init_agent(
     agent._print_fn = None
     agent.background_review_callback = None  # Optional sync callback for gateway delivery
     agent.memory_notifications = "on"  # Memory update notifications: "off", "on", "verbose"
-    agent.skip_context_files = skip_context_files
+    if audited_query_transport and not no_tools:
+        raise ValueError("audited_query_requires_no_tools")
+    if audited_query_transport and (not isinstance(audited_query_text, str) or not audited_query_text):
+        raise ValueError("audited_query_text_required")
+    skip_memory = skip_memory or audited_query_transport
+    agent.audited_query_transport = bool(audited_query_transport)
+    agent._audited_query = audited_query_text if audited_query_transport else None
+    agent.skip_context_files = skip_context_files or audited_query_transport
     agent.load_soul_identity = load_soul_identity
     # Background review (memory/skill) opt-out switch. When True, skips the
     # _spawn_background_review fork at end-of-turn -- avoids ~30K tokens /
@@ -677,7 +686,7 @@ def init_agent(
     # provide no value (no human in the loop, no skill-creation pressure).
     # skip_memory=True already disables the memory-review trigger; this
     # flag is the explicit single-switch off for both review paths.
-    agent.skip_background_review = bool(skip_background_review)
+    agent.skip_background_review = bool(skip_background_review or audited_query_transport)
     agent.pass_session_id = pass_session_id
     agent.log_prefix_chars = log_prefix_chars
     agent.log_prefix = f"{log_prefix} " if log_prefix else ""

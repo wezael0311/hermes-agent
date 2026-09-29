@@ -81,6 +81,13 @@ line to stderr before the provider is called. This input-integrity receipt is
 separate from the no-tools receipt. The mode rejects simultaneous query
 sources, image input, and TUI use.
 
+Combining `--query-stdin` with `--no-tools` also enables exact-query auditing:
+the current provider-visible user text must equal the validated stdin text.
+This one-shot mode skips memory and plugin context enrichment, rejects gateway
+turn notes, resumed sessions, and preloaded skills, and checks the final
+provider request before sending. Ordinary `--no-tools` keeps its usual
+conversation context behavior while still disabling tools.
+
 ### Worktree cleanup
 
 `hermes -w` sessions create disposable worktrees under `<repo>/.worktrees/`.
