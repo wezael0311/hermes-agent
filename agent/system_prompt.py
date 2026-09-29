@@ -725,6 +725,9 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         )
 
     platform_key = (agent.platform or "").lower().strip()
+    if getattr(agent, "audited_query_transport", False):
+        # Closed-book turns must not inherit config or plugin registry hints.
+        platform_key = ""
     # Resolve the built-in/plugin default hint for this platform, then apply
     # any per-platform override from config (platform_hints.<platform>).
     _default_hint = ""

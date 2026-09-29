@@ -2068,7 +2068,7 @@ def init_agent(
     # Stored verbatim; resolution happens in agent/system_prompt.py against
     # the active platform. Invalid shapes are ignored defensively so a bad
     # config entry can never break prompt assembly.
-    _platform_hints_cfg = _agent_cfg.get("platform_hints", {})
+    _platform_hints_cfg = {} if audited_query_transport else _agent_cfg.get("platform_hints", {})
     if not isinstance(_platform_hints_cfg, dict):
         _platform_hints_cfg = {}
     agent._platform_hint_overrides = _platform_hints_cfg

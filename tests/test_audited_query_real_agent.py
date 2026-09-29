@@ -77,6 +77,33 @@ def test_real_codex_turn_preserves_exact_query_and_skips_enrichment(tmp_path, mo
     assert json.loads(receipts[0].read_text(encoding="utf-8"))["external_send_state"] == "dispatch_started"
 
 
+@pytest.mark.parametrize("platform", ["cli", "post_race_test_platform"])
+def test_audited_codex_instructions_exclude_platform_hints(tmp_path, monkeypatch, platform):
+    import cli
+    from gateway.platform_registry import platform_registry
+
+    agent = _agent(tmp_path, monkeypatch, audited_text="exact")
+    agent.platform = platform
+    agent._platform_hint_overrides = {platform: {"append": "POST_RACE_SYSTEM_SENTINEL"}}
+    monkeypatch.setattr(
+        platform_registry, "get",
+        lambda key: SimpleNamespace(platform_hint="POST_RACE_SYSTEM_SENTINEL"),
+    )
+    requests = []
+    monkeypatch.setattr(agent, "_create_request_openai_client", lambda **kw: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(
+        agent, "_run_codex_stream",
+        lambda request, **kw: requests.append(request) or SimpleNamespace(
+            output=[], output_text="answer", status="completed", usage=None
+        ),
+    )
+    result = cli._run_cli_agent_turn(agent, user_message="exact", conversation_history=[])
+    assert result["final_response"] == "answer"
+    assert requests[0]["input"] == [{"role": "user", "content": "exact"}]
+    assert "POST_RACE_SYSTEM_SENTINEL" not in requests[0]["instructions"]
+    assert not requests[0].get("tools")
+
+
 def test_gateway_note_fails_closed_before_provider(tmp_path, monkeypatch):
     import cli
 
