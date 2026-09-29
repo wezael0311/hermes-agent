@@ -2499,7 +2499,13 @@ def run_conversation(
         # cloud providers.  Operates on api_messages (the API copy) so
         # the original conversation history in `messages` is untouched.
         for am in api_messages:
-            if isinstance(am.get("content"), str):
+            if (
+                isinstance(am.get("content"), str)
+                and not (
+                    getattr(agent, "audited_query_transport", False)
+                    and am.get("role") == "user"
+                )
+            ):
                 am["content"] = am["content"].strip()
         _canonicalize_api_tool_calls(api_messages)
 
@@ -4445,6 +4451,14 @@ def run_conversation(
                 break
 
             except Exception as api_error:
+                if (
+                    getattr(agent, "audited_query_transport", False)
+                    and isinstance(api_error, RuntimeError)
+                    and str(api_error).startswith("audited_query_")
+                ):
+                    # A local integrity failure cannot succeed on retry or
+                    # provider fallback. Stop before any external request.
+                    raise
                 # Stop spinner silently — retry status is buffered and
                 # only flushed when every retry+fallback is exhausted.
                 if thinking_spinner:

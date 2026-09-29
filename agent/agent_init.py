@@ -522,6 +522,10 @@ def init_agent(
     model: str = "",
     max_iterations: int = sys.maxsize,  # Default: unlimited tool-calling iterations (shared with subagents)
     enabled_toolsets: List[str] = None,
+    no_tools: bool = False,
+    tool_policy: str | None = None,
+    audited_query_transport: bool = False,
+    audited_query_text: str | None = None,
     disabled_toolsets: List[str] = None,
     save_trajectories: bool = False,
     verbose_logging: bool = False,
@@ -667,7 +671,14 @@ def init_agent(
     agent._print_fn = None
     agent.background_review_callback = None  # Optional sync callback for gateway delivery
     agent.memory_notifications = "on"  # Memory update notifications: "off", "on", "verbose"
-    agent.skip_context_files = skip_context_files
+    if audited_query_transport and not no_tools:
+        raise ValueError("audited_query_requires_no_tools")
+    if audited_query_transport and (not isinstance(audited_query_text, str) or not audited_query_text):
+        raise ValueError("audited_query_text_required")
+    skip_memory = skip_memory or audited_query_transport
+    agent.audited_query_transport = bool(audited_query_transport)
+    agent._audited_query = audited_query_text if audited_query_transport else None
+    agent.skip_context_files = skip_context_files or audited_query_transport
     agent.load_soul_identity = load_soul_identity
     # Background review (memory/skill) opt-out switch. When True, skips the
     # _spawn_background_review fork at end-of-turn -- avoids ~30K tokens /
@@ -675,7 +686,7 @@ def init_agent(
     # provide no value (no human in the loop, no skill-creation pressure).
     # skip_memory=True already disables the memory-review trigger; this
     # flag is the explicit single-switch off for both review paths.
-    agent.skip_background_review = bool(skip_background_review)
+    agent.skip_background_review = bool(skip_background_review or audited_query_transport)
     agent.pass_session_id = pass_session_id
     agent.log_prefix_chars = log_prefix_chars
     agent.log_prefix = f"{log_prefix} " if log_prefix else ""
@@ -927,7 +938,12 @@ def init_agent(
     agent.openrouter_min_coding_score = openrouter_min_coding_score
 
     # Store toolset filtering options
-    agent.enabled_toolsets = enabled_toolsets
+    if no_tools and enabled_toolsets not in (None, []):
+        raise ValueError("no_tools_conflicts_with_toolsets")
+    agent.tool_policy = tool_policy or ("no_tools" if no_tools else ("explicit_toolsets" if enabled_toolsets is not None else "auto"))
+    if agent.tool_policy not in {"auto", "explicit_toolsets", "no_tools"} or (agent.tool_policy == "no_tools") != no_tools:
+        raise ValueError("invalid_tool_policy")
+    agent.enabled_toolsets = [] if no_tools else enabled_toolsets
     agent.disabled_toolsets = disabled_toolsets
     
     # Model response configuration
@@ -1019,7 +1035,7 @@ def init_agent(
     # Opt-out flag for the between-turns MCP tool refresh (build_turn_context).
     # Set on internal forks (e.g. background_review) that must keep ``tools[]``
     # byte-identical to a parent for provider cache parity.
-    agent._skip_mcp_refresh = False
+    agent._skip_mcp_refresh = no_tools
     # Registry generation the current tool snapshot was derived from. Lets a
     # late/concurrent refresh reject a stale (older-generation) rebuild instead
     # of clobbering a newer one. Set adjacent to the tool snapshot below.
@@ -1563,12 +1579,13 @@ def init_agent(
     # A multiplexed gateway may enter a different HERMES_HOME after
     # ``model_tools`` was first imported. Ensure that profile's keyed plugin
     # manager has discovered its registrations before taking the tool snapshot.
-    try:
-        from hermes_cli.plugins import discover_plugins
+    if not no_tools:
+        try:
+            from hermes_cli.plugins import discover_plugins
 
-        discover_plugins()
-    except Exception:
-        logger.warning("Plugin discovery failed during agent setup", exc_info=True)
+            discover_plugins()
+        except Exception:
+            logger.warning("Plugin discovery failed during agent setup", exc_info=True)
 
     # Get available tools with filtering. Capture the registry generation this
     # snapshot is derived from FIRST, so a later concurrent refresh can tell
@@ -1578,7 +1595,7 @@ def init_agent(
         agent._tool_snapshot_generation = _snapshot_registry._generation
     except Exception:
         agent._tool_snapshot_generation = 0
-    agent.tools = _ra().get_tool_definitions(
+    agent.tools = [] if no_tools else _ra().get_tool_definitions(
         enabled_toolsets=enabled_toolsets,
         disabled_toolsets=disabled_toolsets,
         quiet_mode=agent.quiet_mode,
@@ -2051,7 +2068,7 @@ def init_agent(
     # Stored verbatim; resolution happens in agent/system_prompt.py against
     # the active platform. Invalid shapes are ignored defensively so a bad
     # config entry can never break prompt assembly.
-    _platform_hints_cfg = _agent_cfg.get("platform_hints", {})
+    _platform_hints_cfg = {} if audited_query_transport else _agent_cfg.get("platform_hints", {})
     if not isinstance(_platform_hints_cfg, dict):
         _platform_hints_cfg = {}
     agent._platform_hint_overrides = _platform_hints_cfg

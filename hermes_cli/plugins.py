@@ -48,6 +48,7 @@ import sys
 import threading
 import types
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from functools import wraps
 from pathlib import Path
@@ -5819,6 +5820,25 @@ def has_enabled_agent_plugin_mcp(raw_config: Mapping[str, Any]) -> bool:
     return PluginManager().has_enabled_portable_mcp(raw_config)
 
 
+_skip_discovery_for_no_tools_import: ContextVar[bool] = ContextVar(
+    "skip_discovery_for_no_tools_import", default=False
+)
+
+
+def plugin_discovery_suppressed() -> bool:
+    return _skip_discovery_for_no_tools_import.get()
+
+
+@contextmanager
+def suppress_plugin_discovery_for_no_tools_import():
+    """Scope the legacy model_tools import-time discovery to one CLI import."""
+    token = _skip_discovery_for_no_tools_import.set(True)
+    try:
+        yield
+    finally:
+        _skip_discovery_for_no_tools_import.reset(token)
+
+
 def discover_plugins(force: bool = False) -> None:
     """Discover and load all plugins.
 
@@ -5829,6 +5849,8 @@ def discover_plugins(force: bool = False) -> None:
     :func:`start_background_plugin_discovery` is still running, this waits
     for it instead of racing a second scan.
     """
+    if plugin_discovery_suppressed():
+        return
     _join_background_discovery()
     get_plugin_manager().discover_and_load(force=force)
 

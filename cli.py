@@ -1013,12 +1013,15 @@ def _mark_tui_input_modes_active() -> None:
     _tui_input_modes_active = True
 
 
-def _prepare_deferred_agent_startup() -> None:
+def _prepare_deferred_agent_startup(*, tool_policy: str = "auto") -> None:
     """Run Termux-deferred agent discovery before the first real agent turn."""
     global _deferred_agent_startup_done
     if _deferred_agent_startup_done:
         return
     if os.environ.get("HERMES_DEFER_AGENT_STARTUP") != "1":
+        return
+    if tool_policy == "no_tools":
+        # A later normal CLI turn must still be able to run discovery.
         return
     _deferred_agent_startup_done = True
     _accept_hooks = os.environ.get("HERMES_ACCEPT_HOOKS", "").lower() in {
@@ -5008,6 +5011,21 @@ class _VoiceInputMessage:
         return self.text
 
 
+def _run_cli_agent_turn(agent, *, user_message, **kwargs):
+    """Start one CLI text-turn receipt before either display mode dispatches."""
+    if getattr(agent, "tool_policy", None) == "no_tools":
+        if not isinstance(user_message, str):
+            raise ValueError("no_tools_requires_text_query")
+        from agent.no_tools_receipt import start_no_tools_receipt
+        if getattr(agent, "audited_query_transport", False):
+            if kwargs.get("conversation_history") or getattr(agent, "prefill_messages", None):
+                raise RuntimeError("audited_query_requires_fresh_session")
+            if user_message != getattr(agent, "_audited_query", None):
+                raise RuntimeError("audited_query_content_mismatch")
+        start_no_tools_receipt(agent, user_message)
+    return agent.run_conversation(user_message=user_message, **kwargs)
+
+
 class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
     """
     Interactive CLI for the Hermes Agent.
@@ -5020,6 +5038,10 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         self,
         model: str = None,
         toolsets: List[str] = None,
+        no_tools: bool = False,
+        tool_policy: str | None = None,
+        audited_query_transport: bool = False,
+        audited_query_text: str | None = None,
         provider: str = None,
         reasoning: str = None,
         api_key: str = None,
@@ -5303,12 +5325,21 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             self.run_budget_seconds = CLI_CONFIG["agent"].get("run_budget_seconds")
 
         # Parse and validate toolsets
-        self.enabled_toolsets = toolsets
+        if no_tools and toolsets not in (None, []):
+            raise ValueError("no_tools_conflicts_with_toolsets")
+        if audited_query_transport and not no_tools:
+            raise ValueError("audited_query_requires_no_tools")
+        if audited_query_transport and (not isinstance(audited_query_text, str) or not audited_query_text):
+            raise ValueError("audited_query_text_required")
+        self.tool_policy = tool_policy or ("no_tools" if no_tools else ("explicit_toolsets" if toolsets is not None else "auto"))
+        self.audited_query_transport = audited_query_transport
+        self.audited_query_text = audited_query_text
+        self.enabled_toolsets = [] if no_tools else toolsets
         from agent.skill_utils import parse_config_string_list
 
         self.disabled_toolsets = parse_config_string_list(CLI_CONFIG["agent"].get("disabled_toolsets"))
 
-        if toolsets and "all" not in toolsets and "*" not in toolsets:
+        if not no_tools and toolsets and "all" not in toolsets and "*" not in toolsets:
             # Validate each toolset — MCP server names are resolved via
             # live registry aliases (registered during discover_mcp_tools),
             # but discovery hasn't run yet at this point, so exclude them.
@@ -8405,6 +8436,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
     def show_banner(self):
         """Display the welcome banner in Claude Code style."""
+        if self.tool_policy == "no_tools":
+            self._console_print("Hermes chat (no tools)")
+            return
         self.console.clear()
         ctx_len = None
         if hasattr(self, 'agent') and self.agent and hasattr(self.agent, 'context_compressor'):
@@ -16329,6 +16363,10 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         if agent is None:
             return None
 
+        if self.tool_policy == "no_tools":
+            if not isinstance(message, str) or images:
+                raise ValueError("no_tools_requires_text_query")
+
         # Route image attachments based on the active model's vision capability.
         # "native" → pass pixels as OpenAI-style content parts (adapters
         #            translate for Anthropic/Gemini/Bedrock).
@@ -16632,7 +16670,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 )
                 self._pending_one_turn_model_restore = None
                 try:
-                    result = self.agent.run_conversation(
+                    result = _run_cli_agent_turn(
+                        self.agent,
                         user_message=agent_message,
                         conversation_history=self.conversation_history[:-1],  # Exclude the message we just added
                         stream_callback=stream_callback,
@@ -21055,8 +21094,12 @@ def _run_kanban_goal_loop_q(cli: "HermesCLI", first_response: str) -> None:
 def main(
     query: str = None,
     q: str = None,
+    query_stdin: bool = False,
+    audited_query_transport: bool = False,
+    audited_query_text: str | None = None,
     image: str = None,
     toolsets: str = None,
+    no_tools: bool = False,
     skills: str | list[str] | tuple[str, ...] = None,
     model: str = None,
     provider: str = None,
@@ -21222,7 +21265,17 @@ def main(
     # Parse toolsets - handle both string and tuple/list inputs
     # Default to hermes-cli toolset which includes cronjob management tools
     toolsets_list = None
-    if toolsets:
+    if no_tools and toolsets is not None:
+        raise ValueError("no_tools_conflicts_with_toolsets")
+    if no_tools and image:
+        raise ValueError("no_tools_requires_text_query")
+    if audited_query_transport and (not no_tools or not query_stdin or resume or skills):
+        raise ValueError("audited_query_requires_fresh_unskilled_session")
+    if audited_query_transport and query != audited_query_text:
+        raise RuntimeError("audited_query_content_mismatch")
+    if no_tools:
+        toolsets_list = []
+    elif toolsets:
         if isinstance(toolsets, str):
             toolsets_list = [t.strip() for t in toolsets.split(",")]
         elif isinstance(toolsets, (list, tuple)):
@@ -21256,6 +21309,10 @@ def main(
     cli = HermesCLI(
         model=model,
         toolsets=toolsets_list,
+        no_tools=no_tools,
+        audited_query_transport=audited_query_transport,
+        audited_query_text=audited_query_text,
+        tool_policy="no_tools" if no_tools else ("explicit_toolsets" if toolsets is not None else "auto"),
         provider=provider,
         reasoning=reasoning,
         api_key=api_key,
@@ -21429,7 +21486,12 @@ def main(
         if not cli._claim_active_session("cli", stderr=bool(quiet)):
             sys.exit(1)
         try:
-            query, single_query_images = _collect_query_images(query, image)
+            # The audited stdin transport must preserve the decoded query
+            # verbatim; attachment auto-detection can rewrite text.
+            if query_stdin:
+                single_query_images = []
+            else:
+                query, single_query_images = _collect_query_images(query, image)
             # Kanban workers spawn with ``hermes chat -q "work kanban task <id>"``;
             # the actual task description lives in the task body. Mirror the
             # gateway/CLI behaviour for inbound images by scanning the body for
@@ -21467,6 +21529,8 @@ def main(
                 except Exception as _exc:
                     # Best-effort enrichment; never block worker startup on it.
                     logger.debug("kanban image-ref extraction failed: %s", _exc)
+            if no_tools and (single_query_images or single_query_image_urls):
+                raise ValueError("no_tools_requires_text_query")
             if quiet:
                 # Quiet mode: suppress banner, spinner, tool previews.
                 # Only print the final response and parseable session info.
@@ -21562,7 +21626,8 @@ def main(
                         # from display.tool_progress at construction).
                         cli.agent.tool_progress_mode = "off"
                         try:
-                            result = cli.agent.run_conversation(
+                            result = _run_cli_agent_turn(
+                                cli.agent,
                                 user_message=effective_query,
                                 conversation_history=cli.conversation_history,
                             )

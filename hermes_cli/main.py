@@ -2948,7 +2948,82 @@ def _resolve_use_tui(args) -> bool:
 
 def cmd_chat(args):
     """Run interactive chat CLI."""
+    if getattr(args, "no_tools", False) and getattr(args, "toolsets", None) is not None:
+        print("no_tools_conflicts_with_toolsets", file=sys.stderr)
+        sys.exit(2)
     use_tui = _resolve_use_tui(args)
+
+    # Validate the audited stdin transport before importing cli or creating an
+    # agent. The receipt describes input integrity at this pre-send point only.
+    query_stdin = bool(getattr(args, "query_stdin", False))
+    audited_query_transport = query_stdin and bool(getattr(args, "no_tools", False))
+    audited_query_text = None
+    expected_sha = getattr(args, "expected_query_sha256", None)
+    if query_stdin:
+        import hashlib
+        import json
+        import re
+
+        if getattr(args, "query", None) is not None or getattr(args, "query_file", None):
+            print("query_stdin_conflicting_query_source", file=sys.stderr)
+            sys.exit(2)
+        if use_tui or getattr(args, "image", None):
+            print("query_stdin_requires_cli_text", file=sys.stderr)
+            sys.exit(2)
+        if audited_query_transport and any((
+            getattr(args, "resume", None),
+            getattr(args, "continue_last", None),
+            getattr(args, "create_if_missing", False),
+            getattr(args, "skills", None),
+        )):
+            print("audited_query_requires_fresh_unskilled_session", file=sys.stderr)
+            sys.exit(2)
+        if not isinstance(expected_sha, str) or re.fullmatch(
+            r"[0-9a-f]{64}", expected_sha
+        ) is None:
+            print("query_stdin_expected_sha256_invalid", file=sys.stderr)
+            sys.exit(2)
+        try:
+            query_bytes = sys.stdin.buffer.read()
+        except (OSError, AttributeError) as exc:
+            print(f"query_stdin_read_failed: {exc}", file=sys.stderr)
+            sys.exit(2)
+        actual_sha = hashlib.sha256(query_bytes).hexdigest()
+        if actual_sha != expected_sha:
+            print("query_stdin_sha256_mismatch", file=sys.stderr)
+            sys.exit(2)
+        try:
+            args.query = query_bytes.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            print("query_stdin_invalid_utf8", file=sys.stderr)
+            sys.exit(2)
+        if not args.query:
+            print("query_stdin_empty", file=sys.stderr)
+            sys.exit(2)
+        if audited_query_transport:
+            audited_query_text = args.query
+        receipt = {
+            "transport_version": "hermes-chat-query-stdin-v1",
+            "query_byte_count": len(query_bytes),
+            "query_sha256": actual_sha,
+            "utf8_decode_success": True,
+            "expected_sha_match": True,
+            "external_send_performed": False,
+        }
+        print(
+            "HERMES_QUERY_STDIN_RECEIPT " + json.dumps(receipt, separators=(",", ":")),
+            file=sys.stderr,
+        )
+    elif expected_sha is not None:
+        print("query_stdin_required_for_expected_sha256", file=sys.stderr)
+        sys.exit(2)
+
+    if getattr(args, "no_tools", False) and use_tui:
+        print("no_tools_requires_cli", file=sys.stderr)
+        sys.exit(2)
+    if getattr(args, "no_tools", False) and getattr(args, "image", None):
+        print("no_tools_requires_text_query", file=sys.stderr)
+        sys.exit(2)
 
     _apply_safe_mode(args)
 
@@ -3223,8 +3298,14 @@ def cmd_chat(args):
             accept_hooks=getattr(args, "accept_hooks", False),
         )
 
-    # Import and run the CLI
-    from cli import main as cli_main
+    # model_tools historically discovers plugins at import time. Scope that
+    # legacy side effect out of this explicit no-tools CLI import only.
+    if getattr(args, "no_tools", False):
+        from hermes_cli.plugins import suppress_plugin_discovery_for_no_tools_import
+        with suppress_plugin_discovery_for_no_tools_import():
+            from cli import main as cli_main
+    else:
+        from cli import main as cli_main
 
     # --query-file: read the single query from a file (or stdin via '-') so
     # callers never have to shell-quote message bodies. This is the transport
@@ -3257,10 +3338,14 @@ def cmd_chat(args):
         "provider": getattr(args, "provider", None),
         "reasoning": getattr(args, "reasoning", None),
         "toolsets": args.toolsets,
+        "no_tools": getattr(args, "no_tools", False),
         "skills": getattr(args, "skills", None),
         "verbose": getattr(args, "verbose", None),
         "quiet": getattr(args, "quiet", False),
         "query": args.query,
+        "query_stdin": query_stdin,
+        "audited_query_transport": audited_query_transport,
+        "audited_query_text": audited_query_text,
         "image": getattr(args, "image", None),
         "resume": getattr(args, "resume", None),
         "worktree": getattr(args, "worktree", False),
@@ -12062,6 +12147,11 @@ def _should_background_mcp_startup(args) -> bool:
 
 def _prepare_agent_startup(args) -> None:
     """Discover plugins/MCP/hooks for commands that can run an agent turn."""
+    if getattr(args, "no_tools", False):
+        if getattr(args, "toolsets", None) is not None:
+            print("no_tools_conflicts_with_toolsets", file=sys.stderr)
+            sys.exit(2)
+        return
     # --yolo: chokepoint guarantee that HERMES_YOLO_MODE is set before ANY
     # plugin/tool discovery below imports tools.approval, which freezes
     # _YOLO_MODE_FROZEN at import time (PR #7994 security design).  main()'s

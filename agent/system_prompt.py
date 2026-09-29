@@ -725,6 +725,9 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         )
 
     platform_key = (agent.platform or "").lower().strip()
+    if getattr(agent, "audited_query_transport", False):
+        # Closed-book turns must not inherit config or plugin registry hints.
+        platform_key = ""
     # Resolve the built-in/plugin default hint for this platform, then apply
     # any per-platform override from config (platform_hints.<platform>).
     _default_hint = ""
@@ -817,7 +820,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     if skills_prompt:
         volatile_parts.append(skills_prompt)
 
-    if agent._memory_store:
+    if agent._memory_store and not getattr(agent, "audited_query_transport", False):
         if agent._memory_enabled:
             mem_block = agent._memory_store.format_for_system_prompt("memory")
             if mem_block:
@@ -829,7 +832,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
                 volatile_parts.append(user_block)
 
     # External memory provider system prompt block (additive to built-in)
-    if agent._memory_manager:
+    if agent._memory_manager and not getattr(agent, "audited_query_transport", False):
         try:
             _ext_mem_block = agent._memory_manager.build_system_prompt()
             if _ext_mem_block:
@@ -840,9 +843,10 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # Plugin sections are intentionally confined to one coarse anchor in the
     # volatile tail. This preserves deterministic ordering and lets a resumed
     # process reconstruct the stable cache prefix without re-running plugins.
-    volatile_parts.extend(
-        _plugin_section_blocks(_frozen_plugin_prompt_sections(agent), "after_memory")
-    )
+    if not getattr(agent, "audited_query_transport", False):
+        volatile_parts.extend(
+            _plugin_section_blocks(_frozen_plugin_prompt_sections(agent), "after_memory")
+        )
 
     from hermes_time import get_timezone as _hermes_tz, now as _hermes_now
     now = _hermes_now()
@@ -937,7 +941,7 @@ def invalidate_system_prompt(agent: Any) -> None:
     """
     agent._cached_system_prompt = None
     agent._cached_system_prompt_static = None
-    if agent._memory_store:
+    if agent._memory_store and not getattr(agent, "audited_query_transport", False):
         agent._memory_store.load_from_disk()
 
 

@@ -30,6 +30,9 @@ hermes chat -q "Hello"
 hermes chat --query-file prompt.txt
 hermes chat --query-file - < prompt.txt
 
+# Audited raw-stdin transport: SHA-256 must match the exact input bytes
+hermes chat --query-stdin --expected-query-sha256 <sha256> -Q < prompt.txt
+
 # With a specific model
 hermes chat --model "anthropic/claude-sonnet-4"
 
@@ -39,6 +42,9 @@ hermes chat --provider openrouter  # Force OpenRouter
 
 # With specific toolsets
 hermes chat --toolsets "web,terminal,skills"
+
+# Explicit zero-tool transport (also works with --query-stdin)
+hermes chat --no-tools -q "Answer from the supplied text only"
 
 # Start with one or more skills preloaded
 hermes -s hermes-agent-dev,github-auth
@@ -57,6 +63,30 @@ hermes chat --verbose
 hermes -w                         # Interactive mode in worktree
 hermes -w -z "Fix issue #123"     # Single query in worktree
 ```
+
+`--no-tools` disables tool, Web, and MCP invocation capabilities for the chat.
+It is distinct from omitting `-t/--toolsets`: omission keeps the usual
+platform/default resolution. Combining `--no-tools` with `-t/--toolsets` is an
+error. The mode uses the CLI text path; `--tui` and image attachments are
+rejected. It never falls back to platform, workspace, Web, or MCP tools.
+No-tools requests fail before provider dispatch if any tool schema
+remains. Each text turn writes a JSON receipt under
+`$HERMES_HOME/receipts/` (or `~/.hermes/receipts/`) with the query hash,
+effective zero-tool count, provider/model, and external dispatch state.
+This mode does not remove knowledge already present in the model.
+
+`--query-stdin` reads raw stdin bytes, checks the required lowercase SHA-256,
+then decodes UTF-8 strictly. It emits one `HERMES_QUERY_STDIN_RECEIPT ` JSON
+line to stderr before the provider is called. This input-integrity receipt is
+separate from the no-tools receipt. The mode rejects simultaneous query
+sources, image input, and TUI use.
+
+Combining `--query-stdin` with `--no-tools` also enables exact-query auditing:
+the current provider-visible user text must equal the validated stdin text.
+This one-shot mode skips memory and plugin context enrichment, rejects gateway
+turn notes, resumed sessions, and preloaded skills, and checks the final
+provider request before sending. Ordinary `--no-tools` keeps its usual
+conversation context behavior while still disabling tools.
 
 ### Worktree cleanup
 

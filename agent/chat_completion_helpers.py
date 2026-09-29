@@ -939,6 +939,11 @@ def _dispatch_nonstreaming_api_request(agent, api_kwargs: dict, *, make_client):
     interrupt, abort, cancellation, and close semantics stay in the callers —
     this helper only issues the request.
     """
+    from agent.no_tools_boundary import assert_audited_query_content, assert_no_tools_boundary
+    assert_no_tools_boundary(agent, api_kwargs)
+    assert_audited_query_content(agent, api_kwargs)
+    from agent.no_tools_receipt import mark_no_tools_dispatch
+    mark_no_tools_dispatch(agent, api_kwargs)
     if agent.api_mode == "codex_responses":
         request_client = make_client("codex_stream_request")
         return agent._run_codex_stream(
@@ -1826,6 +1831,8 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
     """Build the keyword arguments dict for the active API mode."""
     if tools_for_api is None:
         tools_for_api = agent.tools
+    from agent.no_tools_boundary import assert_no_tools_boundary
+    assert_no_tools_boundary(agent, {"tools": tools_for_api})
 
     if agent.api_mode == "anthropic_messages":
         _transport = agent._get_transport()
@@ -3301,6 +3308,11 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
     Falls back to _interruptible_api_call on provider errors indicating
     streaming is not supported.
     """
+    from agent.no_tools_boundary import assert_audited_query_content, assert_no_tools_boundary
+    assert_no_tools_boundary(agent, api_kwargs)
+    assert_audited_query_content(agent, api_kwargs)
+    from agent.no_tools_receipt import mark_no_tools_dispatch
+    mark_no_tools_dispatch(agent, api_kwargs)
     if agent._interrupt_requested:
         raise InterruptedError("Agent interrupted before streaming API call")
 

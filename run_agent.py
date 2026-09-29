@@ -456,6 +456,10 @@ class AIAgent:
         max_iterations: int = sys.maxsize,  # Default: unlimited tool-calling iterations (shared with subagents)
         tool_delay: float = None,  # Deprecated: accepted for compatibility, ignored
         enabled_toolsets: List[str] = None,
+        no_tools: bool = False,
+        tool_policy: str | None = None,
+        audited_query_transport: bool = False,
+        audited_query_text: str | None = None,
         disabled_toolsets: List[str] = None,
         save_trajectories: bool = False,
         verbose_logging: bool = False,
@@ -547,6 +551,10 @@ class AIAgent:
             model=model,
             max_iterations=max_iterations,
             enabled_toolsets=enabled_toolsets,
+            no_tools=no_tools,
+            tool_policy=tool_policy,
+            audited_query_transport=audited_query_transport,
+            audited_query_text=audited_query_text,
             disabled_toolsets=disabled_toolsets,
             save_trajectories=save_trajectories,
             verbose_logging=verbose_logging,
@@ -8387,6 +8395,8 @@ class AIAgent:
         segment in emission order so safe subsets still run concurrently
         while side-effect ordering is preserved.
         """
+        if getattr(self, "tool_policy", None) == "no_tools":
+            raise RuntimeError("no_tools_boundary_violation")
         tool_calls = assistant_message.tool_calls
 
         # Allow _vprint during tool execution even with stream consumers
