@@ -2953,6 +2953,59 @@ def cmd_chat(args):
         sys.exit(2)
     use_tui = _resolve_use_tui(args)
 
+    # Validate the audited stdin transport before importing cli or creating an
+    # agent. The receipt describes input integrity at this pre-send point only.
+    query_stdin = bool(getattr(args, "query_stdin", False))
+    expected_sha = getattr(args, "expected_query_sha256", None)
+    if query_stdin:
+        import hashlib
+        import json
+        import re
+
+        if getattr(args, "query", None) is not None or getattr(args, "query_file", None):
+            print("query_stdin_conflicting_query_source", file=sys.stderr)
+            sys.exit(2)
+        if use_tui or getattr(args, "image", None):
+            print("query_stdin_requires_cli_text", file=sys.stderr)
+            sys.exit(2)
+        if not isinstance(expected_sha, str) or re.fullmatch(
+            r"[0-9a-f]{64}", expected_sha
+        ) is None:
+            print("query_stdin_expected_sha256_invalid", file=sys.stderr)
+            sys.exit(2)
+        try:
+            query_bytes = sys.stdin.buffer.read()
+        except (OSError, AttributeError) as exc:
+            print(f"query_stdin_read_failed: {exc}", file=sys.stderr)
+            sys.exit(2)
+        actual_sha = hashlib.sha256(query_bytes).hexdigest()
+        if actual_sha != expected_sha:
+            print("query_stdin_sha256_mismatch", file=sys.stderr)
+            sys.exit(2)
+        try:
+            args.query = query_bytes.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            print("query_stdin_invalid_utf8", file=sys.stderr)
+            sys.exit(2)
+        if not args.query:
+            print("query_stdin_empty", file=sys.stderr)
+            sys.exit(2)
+        receipt = {
+            "transport_version": "hermes-chat-query-stdin-v1",
+            "query_byte_count": len(query_bytes),
+            "query_sha256": actual_sha,
+            "utf8_decode_success": True,
+            "expected_sha_match": True,
+            "external_send_performed": False,
+        }
+        print(
+            "HERMES_QUERY_STDIN_RECEIPT " + json.dumps(receipt, separators=(",", ":")),
+            file=sys.stderr,
+        )
+    elif expected_sha is not None:
+        print("query_stdin_required_for_expected_sha256", file=sys.stderr)
+        sys.exit(2)
+
     if getattr(args, "no_tools", False) and use_tui:
         print("no_tools_requires_cli", file=sys.stderr)
         sys.exit(2)
@@ -3272,6 +3325,7 @@ def cmd_chat(args):
         "verbose": getattr(args, "verbose", None),
         "quiet": getattr(args, "quiet", False),
         "query": args.query,
+        "query_stdin": query_stdin,
         "image": getattr(args, "image", None),
         "resume": getattr(args, "resume", None),
         "worktree": getattr(args, "worktree", False),

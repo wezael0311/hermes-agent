@@ -5008,6 +5008,16 @@ class _VoiceInputMessage:
         return self.text
 
 
+def _run_cli_agent_turn(agent, *, user_message, **kwargs):
+    """Start one CLI text-turn receipt before either display mode dispatches."""
+    if getattr(agent, "tool_policy", None) == "no_tools":
+        if not isinstance(user_message, str):
+            raise ValueError("no_tools_requires_text_query")
+        from agent.no_tools_receipt import start_no_tools_receipt
+        start_no_tools_receipt(agent, user_message)
+    return agent.run_conversation(user_message=user_message, **kwargs)
+
+
 class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
     """
     Interactive CLI for the Hermes Agent.
@@ -16340,8 +16350,6 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         if self.tool_policy == "no_tools":
             if not isinstance(message, str) or images:
                 raise ValueError("no_tools_requires_text_query")
-            from agent.no_tools_receipt import start_no_tools_receipt
-            start_no_tools_receipt(agent, message)
 
         # Route image attachments based on the active model's vision capability.
         # "native" → pass pixels as OpenAI-style content parts (adapters
@@ -16646,7 +16654,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 )
                 self._pending_one_turn_model_restore = None
                 try:
-                    result = self.agent.run_conversation(
+                    result = _run_cli_agent_turn(
+                        self.agent,
                         user_message=agent_message,
                         conversation_history=self.conversation_history[:-1],  # Exclude the message we just added
                         stream_callback=stream_callback,
@@ -21069,6 +21078,7 @@ def _run_kanban_goal_loop_q(cli: "HermesCLI", first_response: str) -> None:
 def main(
     query: str = None,
     q: str = None,
+    query_stdin: bool = False,
     image: str = None,
     toolsets: str = None,
     no_tools: bool = False,
@@ -21452,7 +21462,12 @@ def main(
         if not cli._claim_active_session("cli", stderr=bool(quiet)):
             sys.exit(1)
         try:
-            query, single_query_images = _collect_query_images(query, image)
+            # The audited stdin transport must preserve the decoded query
+            # verbatim; attachment auto-detection can rewrite text.
+            if query_stdin:
+                single_query_images = []
+            else:
+                query, single_query_images = _collect_query_images(query, image)
             # Kanban workers spawn with ``hermes chat -q "work kanban task <id>"``;
             # the actual task description lives in the task body. Mirror the
             # gateway/CLI behaviour for inbound images by scanning the body for
@@ -21587,7 +21602,8 @@ def main(
                         # from display.tool_progress at construction).
                         cli.agent.tool_progress_mode = "off"
                         try:
-                            result = cli.agent.run_conversation(
+                            result = _run_cli_agent_turn(
+                                cli.agent,
                                 user_message=effective_query,
                                 conversation_history=cli.conversation_history,
                             )

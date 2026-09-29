@@ -363,6 +363,16 @@ def build_top_level_parser():
             "verbatim. Mutually exclusive with -q."
         ),
     )
+    _query_group.add_argument(
+        "--query-stdin",
+        action="store_true",
+        help="Read exact UTF-8 query bytes from stdin and verify --expected-query-sha256.",
+    )
+    chat_parser.add_argument(
+        "--expected-query-sha256",
+        metavar="SHA256",
+        help="Required lowercase SHA-256 of raw stdin bytes with --query-stdin.",
+    )
     chat_parser.add_argument(
         "--image", help="Optional local image path to attach to a single query"
     )
