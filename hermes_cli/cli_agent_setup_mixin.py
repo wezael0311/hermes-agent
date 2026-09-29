@@ -502,6 +502,8 @@ class CLIAgentSetupMixin:
                 max_iterations=self.max_turns,
                 run_budget_seconds=getattr(self, "run_budget_seconds", None),
                 enabled_toolsets=self.enabled_toolsets,
+                no_tools=getattr(self, "tool_policy", None) == "no_tools",
+                tool_policy=getattr(self, "tool_policy", None),
                 disabled_toolsets=self.disabled_toolsets,
                 verbose_logging=self.verbose,
                 quiet_mode=not self.verbose,

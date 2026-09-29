@@ -522,6 +522,8 @@ def init_agent(
     model: str = "",
     max_iterations: int = sys.maxsize,  # Default: unlimited tool-calling iterations (shared with subagents)
     enabled_toolsets: List[str] = None,
+    no_tools: bool = False,
+    tool_policy: str | None = None,
     disabled_toolsets: List[str] = None,
     save_trajectories: bool = False,
     verbose_logging: bool = False,
@@ -927,7 +929,12 @@ def init_agent(
     agent.openrouter_min_coding_score = openrouter_min_coding_score
 
     # Store toolset filtering options
-    agent.enabled_toolsets = enabled_toolsets
+    if no_tools and enabled_toolsets not in (None, []):
+        raise ValueError("no_tools_conflicts_with_toolsets")
+    agent.tool_policy = tool_policy or ("no_tools" if no_tools else ("explicit_toolsets" if enabled_toolsets is not None else "auto"))
+    if agent.tool_policy not in {"auto", "explicit_toolsets", "no_tools"} or (agent.tool_policy == "no_tools") != no_tools:
+        raise ValueError("invalid_tool_policy")
+    agent.enabled_toolsets = [] if no_tools else enabled_toolsets
     agent.disabled_toolsets = disabled_toolsets
     
     # Model response configuration
@@ -1019,7 +1026,7 @@ def init_agent(
     # Opt-out flag for the between-turns MCP tool refresh (build_turn_context).
     # Set on internal forks (e.g. background_review) that must keep ``tools[]``
     # byte-identical to a parent for provider cache parity.
-    agent._skip_mcp_refresh = False
+    agent._skip_mcp_refresh = no_tools
     # Registry generation the current tool snapshot was derived from. Lets a
     # late/concurrent refresh reject a stale (older-generation) rebuild instead
     # of clobbering a newer one. Set adjacent to the tool snapshot below.
@@ -1563,12 +1570,13 @@ def init_agent(
     # A multiplexed gateway may enter a different HERMES_HOME after
     # ``model_tools`` was first imported. Ensure that profile's keyed plugin
     # manager has discovered its registrations before taking the tool snapshot.
-    try:
-        from hermes_cli.plugins import discover_plugins
+    if not no_tools:
+        try:
+            from hermes_cli.plugins import discover_plugins
 
-        discover_plugins()
-    except Exception:
-        logger.warning("Plugin discovery failed during agent setup", exc_info=True)
+            discover_plugins()
+        except Exception:
+            logger.warning("Plugin discovery failed during agent setup", exc_info=True)
 
     # Get available tools with filtering. Capture the registry generation this
     # snapshot is derived from FIRST, so a later concurrent refresh can tell
@@ -1578,7 +1586,7 @@ def init_agent(
         agent._tool_snapshot_generation = _snapshot_registry._generation
     except Exception:
         agent._tool_snapshot_generation = 0
-    agent.tools = _ra().get_tool_definitions(
+    agent.tools = [] if no_tools else _ra().get_tool_definitions(
         enabled_toolsets=enabled_toolsets,
         disabled_toolsets=disabled_toolsets,
         quiet_mode=agent.quiet_mode,

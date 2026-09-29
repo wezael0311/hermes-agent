@@ -5020,6 +5020,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         self,
         model: str = None,
         toolsets: List[str] = None,
+        no_tools: bool = False,
+        tool_policy: str | None = None,
         provider: str = None,
         reasoning: str = None,
         api_key: str = None,
@@ -5303,12 +5305,15 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             self.run_budget_seconds = CLI_CONFIG["agent"].get("run_budget_seconds")
 
         # Parse and validate toolsets
-        self.enabled_toolsets = toolsets
+        if no_tools and toolsets not in (None, []):
+            raise ValueError("no_tools_conflicts_with_toolsets")
+        self.tool_policy = tool_policy or ("no_tools" if no_tools else ("explicit_toolsets" if toolsets is not None else "auto"))
+        self.enabled_toolsets = [] if no_tools else toolsets
         from agent.skill_utils import parse_config_string_list
 
         self.disabled_toolsets = parse_config_string_list(CLI_CONFIG["agent"].get("disabled_toolsets"))
 
-        if toolsets and "all" not in toolsets and "*" not in toolsets:
+        if not no_tools and toolsets and "all" not in toolsets and "*" not in toolsets:
             # Validate each toolset — MCP server names are resolved via
             # live registry aliases (registered during discover_mcp_tools),
             # but discovery hasn't run yet at this point, so exclude them.
@@ -8405,6 +8410,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
     def show_banner(self):
         """Display the welcome banner in Claude Code style."""
+        if self.tool_policy == "no_tools":
+            self._console_print("Hermes chat (no tools)")
+            return
         self.console.clear()
         ctx_len = None
         if hasattr(self, 'agent') and self.agent and hasattr(self.agent, 'context_compressor'):
@@ -16329,6 +16337,12 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         if agent is None:
             return None
 
+        if self.tool_policy == "no_tools":
+            if not isinstance(message, str) or images:
+                raise ValueError("no_tools_requires_text_query")
+            from agent.no_tools_receipt import start_no_tools_receipt
+            start_no_tools_receipt(agent, message)
+
         # Route image attachments based on the active model's vision capability.
         # "native" → pass pixels as OpenAI-style content parts (adapters
         #            translate for Anthropic/Gemini/Bedrock).
@@ -21057,6 +21071,7 @@ def main(
     q: str = None,
     image: str = None,
     toolsets: str = None,
+    no_tools: bool = False,
     skills: str | list[str] | tuple[str, ...] = None,
     model: str = None,
     provider: str = None,
@@ -21222,7 +21237,13 @@ def main(
     # Parse toolsets - handle both string and tuple/list inputs
     # Default to hermes-cli toolset which includes cronjob management tools
     toolsets_list = None
-    if toolsets:
+    if no_tools and toolsets is not None:
+        raise ValueError("no_tools_conflicts_with_toolsets")
+    if no_tools and image:
+        raise ValueError("no_tools_requires_text_query")
+    if no_tools:
+        toolsets_list = []
+    elif toolsets:
         if isinstance(toolsets, str):
             toolsets_list = [t.strip() for t in toolsets.split(",")]
         elif isinstance(toolsets, (list, tuple)):
@@ -21256,6 +21277,8 @@ def main(
     cli = HermesCLI(
         model=model,
         toolsets=toolsets_list,
+        no_tools=no_tools,
+        tool_policy="no_tools" if no_tools else ("explicit_toolsets" if toolsets is not None else "auto"),
         provider=provider,
         reasoning=reasoning,
         api_key=api_key,
@@ -21467,6 +21490,8 @@ def main(
                 except Exception as _exc:
                     # Best-effort enrichment; never block worker startup on it.
                     logger.debug("kanban image-ref extraction failed: %s", _exc)
+            if no_tools and (single_query_images or single_query_image_urls):
+                raise ValueError("no_tools_requires_text_query")
             if quiet:
                 # Quiet mode: suppress banner, spinner, tool previews.
                 # Only print the final response and parseable session info.

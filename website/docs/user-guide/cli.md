@@ -40,6 +40,9 @@ hermes chat --provider openrouter  # Force OpenRouter
 # With specific toolsets
 hermes chat --toolsets "web,terminal,skills"
 
+# Explicit zero-tool transport (also works with --query-file -)
+hermes chat --no-tools -q "Answer from the supplied text only"
+
 # Start with one or more skills preloaded
 hermes -s hermes-agent-dev,github-auth
 hermes chat -s github-pr-workflow -q "open a draft PR"
@@ -57,6 +60,17 @@ hermes chat --verbose
 hermes -w                         # Interactive mode in worktree
 hermes -w -z "Fix issue #123"     # Single query in worktree
 ```
+
+`--no-tools` disables tool, Web, and MCP invocation capabilities for the chat.
+It is distinct from omitting `-t/--toolsets`: omission keeps the usual
+platform/default resolution. Combining `--no-tools` with `-t/--toolsets` is an
+error. The mode uses the CLI text path; `--tui` and image attachments are
+rejected. It never falls back to platform, workspace, Web, or MCP tools.
+No-tools requests fail before provider dispatch if any tool schema
+remains. Each text turn writes a JSON receipt under
+`$HERMES_HOME/receipts/` (or `~/.hermes/receipts/`) with the query hash,
+effective zero-tool count, provider/model, and external dispatch state.
+This mode does not remove knowledge already present in the model.
 
 ### Worktree cleanup
 

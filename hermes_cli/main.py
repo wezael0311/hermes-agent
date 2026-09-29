@@ -2948,7 +2948,17 @@ def _resolve_use_tui(args) -> bool:
 
 def cmd_chat(args):
     """Run interactive chat CLI."""
+    if getattr(args, "no_tools", False) and getattr(args, "toolsets", None) is not None:
+        print("no_tools_conflicts_with_toolsets", file=sys.stderr)
+        sys.exit(2)
     use_tui = _resolve_use_tui(args)
+
+    if getattr(args, "no_tools", False) and use_tui:
+        print("no_tools_requires_cli", file=sys.stderr)
+        sys.exit(2)
+    if getattr(args, "no_tools", False) and getattr(args, "image", None):
+        print("no_tools_requires_text_query", file=sys.stderr)
+        sys.exit(2)
 
     _apply_safe_mode(args)
 
@@ -3257,6 +3267,7 @@ def cmd_chat(args):
         "provider": getattr(args, "provider", None),
         "reasoning": getattr(args, "reasoning", None),
         "toolsets": args.toolsets,
+        "no_tools": getattr(args, "no_tools", False),
         "skills": getattr(args, "skills", None),
         "verbose": getattr(args, "verbose", None),
         "quiet": getattr(args, "quiet", False),
@@ -12062,6 +12073,11 @@ def _should_background_mcp_startup(args) -> bool:
 
 def _prepare_agent_startup(args) -> None:
     """Discover plugins/MCP/hooks for commands that can run an agent turn."""
+    if getattr(args, "no_tools", False):
+        if getattr(args, "toolsets", None) is not None:
+            print("no_tools_conflicts_with_toolsets", file=sys.stderr)
+            sys.exit(2)
+        return
     # --yolo: chokepoint guarantee that HERMES_YOLO_MODE is set before ANY
     # plugin/tool discovery below imports tools.approval, which freezes
     # _YOLO_MODE_FROZEN at import time (PR #7994 security design).  main()'s
